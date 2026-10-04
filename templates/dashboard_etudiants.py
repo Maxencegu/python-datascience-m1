@@ -67,13 +67,31 @@ CLASSE_FILTRE = "M1"
 #   "TD02 - Quiz (auto).csv"                → quiz TD02
 #   "TD03 - Feuille de Présence (auto).csv" → présence TD03
 GOOGLE_SHEETS = {
-    # À configurer : remplacer par les URLs des Google Sheets M1
-    # "TD02 - Quiz (auto).csv": (
-    #     "https://docs.google.com/spreadsheets/d/ID/export?format=csv&gid=GID"
-    # ),
-    # "TD01 - Feuille de Présence (auto).csv": (
-    #     "https://docs.google.com/spreadsheets/d/ID/export?format=csv&gid=0"
-    # ),
+    "TD02 - Quiz (auto).csv": (
+        "https://docs.google.com/spreadsheets/d/"
+        "1xhPMQG_Y0i2Rnkr7ufYW828zr9R_q8-usbLwj4Ghkq0"
+        "/export?format=csv&gid=1187797802"
+    ),
+    "TD01 - Feuille de Présence (auto).csv": (
+        "https://docs.google.com/spreadsheets/d/"
+        "1LuxotNcrkV6ailed-wrcWM1QXZ4iWS6lZ5RzUYil4wk"
+        "/export?format=csv&gid=1588650101"
+    ),
+    "TD02 - Feuille de Présence (auto).csv": (
+        "https://docs.google.com/spreadsheets/d/"
+        "1SmScpXdePQA2nFOt_M4C2xJ9bqCcfqgbMPOBU50q0UE"
+        "/export?format=csv&gid=274178632"
+    ),
+    "TD03 - Feuille de Présence (auto).csv": (
+        "https://docs.google.com/spreadsheets/d/"
+        "1i15Avu_gHPq79Ofy-Nl4wrin-VehzdasCDu9LLjQBmw"
+        "/export?format=csv&gid=1168937225"
+    ),
+    "TD03 - Quiz (auto).csv": (
+        "https://docs.google.com/spreadsheets/d/"
+        "1S0Y1RvufZMAemgTmRn5j6EtvCxlro6bFJ5LNYbhWx1o"
+        "/export?format=csv&gid=362872238"
+    ),
 }
 
 # ── Barème (README.md § Évaluation) ─────────────────────────────────────────
@@ -451,6 +469,80 @@ def auditer_notebook(source, td):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+#  Audit spécifique TD02 (cycle + propreté)
+# ════════════════════════════════════════════════════════════════════════════
+def audit_td02_cycle(gh, depot, proprietaire, branches):
+    """TD02 : vérifie le cycle Git via API GitHub (4 points)."""
+    result = {"present": True, "ok": 0, "total": 4, "details": [], "placeholders": 0}
+
+    # Check 1 : td02_enonce.ipynb présent sur main
+    contenu_main = gh.api(f"repos/{depot}/contents?ref=main") or []
+    noms_main = {item["name"] for item in contenu_main if isinstance(item, dict)}
+    if "td02_enonce.ipynb" in noms_main:
+        result["ok"] += 1
+    else:
+        result["details"].append("td02_enonce.ipynb absent de main")
+
+    # Check 2 : Pull Request dev_td02 → main créée
+    prs = gh.api(f"repos/{depot}/pulls?state=all&base=main&head={proprietaire}:dev_td02") or []
+    pr = next((p for p in prs if p.get("merged_at")), prs[0] if prs else None)
+    if pr:
+        result["ok"] += 1
+    else:
+        result["details"].append("Pull Request dev_td02 → main non créée")
+
+    # Check 3 : Pull Request mergée
+    if pr and pr.get("merged_at"):
+        result["ok"] += 1
+    elif pr:
+        result["details"].append("Pull Request non mergée")
+
+    # Check 4 : branche dev_td02 supprimée
+    if "dev_td02" not in branches:
+        result["ok"] += 1
+    else:
+        result["details"].append("Branche dev_td02 non supprimée")
+
+    return result
+
+
+_FICHIER_ATTENDU = re.compile(
+    r'^(README\.md|\.gitignore|\.github|td\d+_enonce\.ipynb|perso)$'
+)
+
+
+def proprete_depot(gh, depot, branches, td):
+    """Propreté du dépôt : -1 par fichier ou branche inutile.
+
+    TD02 : seules main et dev_td03 sont autorisées (dev_td03 créée en avance).
+    TD03+ : seule main est autorisée.
+    """
+    if td == "td02":
+        branches_ok = {"main", "dev_td03"}
+    else:
+        branches_ok = {"main"}
+
+    result = {"penalite": 0, "details": []}
+
+    for branche in branches:
+        if branche.lower() not in branches_ok:
+            result["penalite"] += 1
+            result["details"].append(f"branche inutile : {branche}")
+
+    # Fichiers inattendus à la racine de main
+    contenu = gh.api(f"repos/{depot}/contents?ref=main") or []
+    for item in contenu:
+        if not isinstance(item, dict):
+            continue
+        nom = item["name"]
+        if not _FICHIER_ATTENDU.match(nom):
+            result["penalite"] += 1
+            result["details"].append(f"fichier inutile : {nom}")
+
+    return result
+
+
+# ════════════════════════════════════════════════════════════════════════════
 #  Cycle Git d'un TD
 # ════════════════════════════════════════════════════════════════════════════
 def cycle_git(gh, depot, proprietaire, td, branches):
@@ -459,7 +551,7 @@ def cycle_git(gh, depot, proprietaire, td, branches):
     etat = {
         "branche_existe": branche in branches,
         "pr": False, "pr_numero": None, "creee_le": None, "mergee_le": None,
-        "approuvee_par": None, "auto_approuvee": False,
+        "approuvee_par": None, "auto_approuvee": False, "bypass": False,
         "branche_supprimee": False, "checks": None, "url": None,
         "review_requise": td >= PREMIER_TD_REVIEW,
     }
@@ -468,7 +560,12 @@ def cycle_git(gh, depot, proprietaire, td, branches):
         etat["branche_supprimee"] = not etat["branche_existe"] and False
         return etat
 
-    pr = next((p for p in prs if p.get("merged_at")), prs[0])
+    # Dernière PR mergée (tri explicite par merged_at desc) ; sinon la plus récente ouverte.
+    prs_mergees = sorted(
+        [p for p in prs if p.get("merged_at")],
+        key=lambda p: p["merged_at"], reverse=True,
+    )
+    pr = prs_mergees[0] if prs_mergees else prs[0]
     etat.update({
         "pr": True,
         "pr_numero": pr.get("number"),
@@ -489,6 +586,10 @@ def cycle_git(gh, depot, proprietaire, td, branches):
         if approbations:
             etat["auto_approuvee"] = True
 
+    # bypass : mergée sans approbation tiers (applicable TD03+)
+    if pr.get("merged_at") and etat["review_requise"] and not etat["approuvee_par"]:
+        etat["bypass"] = True
+
     sha = (pr.get("head") or {}).get("sha")
     if sha:
         runs = gh.api(f"repos/{depot}/commits/{sha}/check-runs") or {}
@@ -501,7 +602,7 @@ def cycle_git(gh, depot, proprietaire, td, branches):
 # ════════════════════════════════════════════════════════════════════════════
 #  Collecte + notes
 # ════════════════════════════════════════════════════════════════════════════
-def notes_du_td(td, presence, quiz, audit, git):
+def notes_du_td(td, presence, quiz, audit, git, proprete=None):
     bareme = BAREME[td]
     notes = {"presence": 0.0, "notebook": 0.0, "quiz": 0.0, "mp": 0.0}
 
@@ -521,8 +622,12 @@ def notes_du_td(td, presence, quiz, audit, git):
             notes["quiz"] = round(bareme["quiz"] * quiz["obtenu"] / total, 1)
 
     obtenu = sum(notes.values())
+    penalite = (proprete or {}).get("penalite", 0)
+    if git and git.get("bypass"):
+        penalite += 5
+    obtenu = max(0.0, obtenu - penalite)
     maximum = sum(bareme.values())
-    return {"detail": notes, "obtenu": round(obtenu, 1), "max": maximum}
+    return {"detail": notes, "obtenu": round(obtenu, 1), "max": maximum, "penalite": penalite}
 
 
 def collecter(tds, hors_ligne=False, rafraichir=False):
@@ -577,23 +682,29 @@ def _traiter_etudiant(email, fiche, tds, gh, presences, quiz):
     donnees_tds = {}
     for td in tds:
         audit = {"present": False, "ok": 0, "total": 0, "details": [], "placeholders": 0}
+        proprete = None
         git = None
         if depot_ok:
-            audit = auditer_notebook(gh.fichier(depot, f"{td}_enonce.ipynb"), td)
+            if td == "td02":
+                audit = audit_td02_cycle(gh, depot, username, branches)
+            else:
+                audit = auditer_notebook(gh.fichier(depot, f"{td}_enonce.ipynb"), td)
             if td >= PREMIER_TD_GIT:
                 git = cycle_git(gh, depot, username, td, branches)
+                proprete = proprete_depot(gh, depot, branches, td)
 
         numero = fiche.get("numero", "")
         td_presences = presences.get(td, {})
         presence = (email in td_presences
                     or (numero and numero in td_presences))
         presence_le = td_presences.get(email) or (td_presences.get(numero) if numero else None)
-        note = notes_du_td(td, presence, quiz.get(td, {}).get(email), audit, git)
+        note = notes_du_td(td, presence, quiz.get(td, {}).get(email), audit, git, proprete)
         donnees_tds[td] = {
             "presence": presence,
             "presence_le": presence_le,
             "quiz": quiz.get(td, {}).get(email),
             "audit": audit,
+            "proprete": proprete,
             "git": git,
             "note": note,
         }
@@ -724,6 +835,9 @@ GABARIT = """<!DOCTYPE html>
   .fiche h4 { font-size: 14.5px; margin-bottom: 7px; }
   .fiche .l { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 2px 0; color: #c3cbd4; }
   .pb { color: #ff9c92; font-size: 12.5px; margin-top: 6px; line-height: 1.45; }
+  .fiche-alerte { border-color: #f85149 !important; background: #1a0d0d !important; }
+  .fiche-alerte h4 { color: #ff7b72; }
+  .l-pb { font-size: 13px; color: #ffa198; padding: 2px 0; line-height: 1.4; }
   a { color: var(--bleu); text-decoration: none; }
   .vide { text-align: center; color: var(--doux); padding: 40px; }
 </style>
@@ -742,6 +856,8 @@ GABARIT = """<!DOCTYPE html>
     <select id="selectTd"></select>
     <button id="btnProblemes">Problèmes uniquement</button>
     <button id="btnSansDepot">Sans dépôt</button>
+    <input id="filtreIssue" placeholder="Username GitHub (optionnel)" style="margin-left:auto;width:220px">
+    <button id="btnIssues" style="background:#1f6feb;border-color:#388bfd;color:#e6edf3">📋 Générer le script d'issues</button>
     <span class="meta" id="compteur"></span>
   </div>
 
@@ -769,11 +885,12 @@ function scoreEtudiant(e) {
   return { obtenu: Math.round(obtenu * 10) / 10, max, pct: max ? Math.round(1000 * obtenu / max) / 10 : 0 };
 }
 
-function problemes(e) {
+function problemes(e, tds) {
+  tds = tds || tdsAffiches();
   const liste = [];
   if (!e.username) liste.push("pseudo GitHub inconnu");
   else if (!e.depot_ok) liste.push("dépôt introuvable ou privé");
-  for (const td of tdsAffiches()) {
+  for (const td of tds) {
     const d = e.tds[td], b = DONNEES.bareme[td];
     if (!d.presence) liste.push(`${td} : absent`);
     if (e.depot_ok && !d.audit.present) liste.push(`${td} : notebook absent de main`);
@@ -785,11 +902,14 @@ function problemes(e) {
       if (!d.git.pr) liste.push(`${td} : aucune Pull Request`);
       else {
         if (!d.git.mergee_le) liste.push(`${td} : PR non mergée`);
-        if (d.git.review_requise && !d.git.approuvee_par) liste.push(`${td} : ${d.git.auto_approuvee ? "auto-approuvée" : "sans review"}`);
+        if (d.git.bypass) liste.push(`${td} : bypass (merge sans review tiers)`);
+        else if (d.git.review_requise && !d.git.approuvee_par) liste.push(`${td} : ${d.git.auto_approuvee ? "auto-approuvée" : "sans review"}`);
         if (!d.git.branche_supprimee) liste.push(`${td} : branche non supprimée`);
         if (d.git.checks === "failure") liste.push(`${td} : Actions en échec`);
       }
     }
+    if (d.proprete && d.proprete.penalite)
+      liste.push(`${td} : -${d.proprete.penalite} propreté (${d.proprete.details.join(", ")})`);
   }
   return liste;
 }
@@ -798,6 +918,7 @@ function etatGit(g) {
   if (!g) return pastille("neutre", "—");
   if (!g.pr) return pastille("ko", "pas de PR");
   if (!g.mergee_le) return pastille("attente", "PR ouverte");
+  if (g.bypass) return pastille("ko", g.auto_approuvee ? "bypass (auto-approuvée)" : "bypass (sans review)");
   if (g.review_requise && !g.approuvee_par) return pastille("attente", g.auto_approuvee ? "auto-approuvée" : "sans review");
   if (!g.branche_supprimee) return pastille("attente", "branche restante");
   if (g.checks === "failure") return pastille("ko", "Actions ❌");
@@ -821,23 +942,33 @@ function lignes() {
 }
 
 function detail(e) {
+  const toutPbs = problemes(e);
+  const carteAlerte = toutPbs.length
+    ? `<div class="fiche fiche-alerte">
+        <h4>⚠️ Points bloquants (${toutPbs.length})</h4>
+        ${toutPbs.map(x => `<div class="l-pb">• ${x}</div>`).join("")}
+       </div>`
+    : "";
+
   const cartes = tdsAffiches().map(td => {
     const d = e.tds[td], b = DONNEES.bareme[td], n = d.note.detail;
-    const pbs = d.audit.details.slice(0, 4).map(x => `• ${x}`).join("<br>");
+    const pbs = d.audit.details.map(x => `• ${x}`).join("<br>");
     return `<div class="fiche">
       <h4>${td.toUpperCase()} — ${DONNEES.libelles[td]}</h4>
       <div class="l"><span>Présence</span><span>${d.presence ? "✅" : "❌"} ${n.presence}/${b.presence}</span></div>
       <div class="l"><span>Notebook (${d.audit.ok}/${d.audit.total} cellules)</span><span>${n.notebook}/${b.notebook}</span></div>
+      ${d.proprete && d.proprete.penalite ? `<div class="l"><span>Pénalité propreté</span><span style="color:#ff7b72">-${d.proprete.penalite} pt${d.proprete.penalite > 1 ? "s" : ""} — ${d.proprete.details.join(", ")}</span></div>` : ""}
       ${b.quiz ? `<div class="l"><span>Quiz</span><span>${n.quiz}/${b.quiz}</span></div>` : ""}
       ${b.mp ? `<div class="l"><span>Mini-projet</span><span>${n.mp}/${b.mp}</span></div>` : ""}
       ${d.git ? `<div class="l"><span>Cycle Git</span><span>${etatGit(d.git)}</span></div>
       <div class="l"><span>PR créée / mergée</span><span>${jour(d.git.creee_le)} → ${jour(d.git.mergee_le)}</span></div>
       ${d.git.approuvee_par ? `<div class="l"><span>Approuvée par</span><span>${d.git.approuvee_par}</span></div>` : ""}
+      ${d.git.bypass ? `<div class="l"><span>Pénalité bypass</span><span style="color:#ff7b72">-5 pts (merge sans review tiers)</span></div>` : ""}
       ${d.git.url ? `<div class="l"><span>Lien</span><a href="${d.git.url}" target="_blank">PR #${d.git.pr_numero}</a></div>` : ""}` : ""}
       ${pbs ? `<div class="pb">${pbs}</div>` : ""}
     </div>`;
   }).join("");
-  return `<tr class="detail"><td colspan="9"><div class="grille">${cartes}</div></td></tr>`;
+  return `<tr class="detail"><td colspan="9"><div class="grille">${carteAlerte}${cartes}</div></td></tr>`;
 }
 
 function rendre() {
@@ -871,7 +1002,12 @@ function rendre() {
         <td>${cellulesOk}/${cellulesTot}<div class="barre"><span style="width:${cellulesTot ? 100 * cellulesOk / cellulesTot : 0}%"></span></div></td>
         <td>${gits || pastille("neutre", "—")}</td>
         <td><b>${s.obtenu}</b>/${s.max}<div class="meta">${s.pct} %</div></td>
-        <td>${pbs.length ? pastille("ko", pbs.length + " à voir") : pastille("ok", "tout est propre")}</td>
+        <td>${(()=>{
+          const avertis = tds.reduce((n,td)=>n+(e.tds[td].audit.details||[]).length,0);
+          if (pbs.length) return pastille("ko", pbs.length + " à voir");
+          if (avertis) return pastille("attente", avertis + " avertissement" + (avertis>1?"s":""));
+          return pastille("ok", "tout est propre");
+        })()}</td>
       </tr>` + `<tr class="detail" id="d${i}" style="display:none"><td colspan="9"></td></tr>`;
     }).join("");
 
@@ -906,6 +1042,76 @@ document.getElementById("btnProblemes").addEventListener("click", (ev) => {
 });
 document.getElementById("btnSansDepot").addEventListener("click", (ev) => {
   filtreSansDepot = !filtreSansDepot; ev.target.classList.toggle("actif", filtreSansDepot); rendre();
+});
+
+document.getElementById("btnIssues").addEventListener("click", () => {
+  const filtre = document.getElementById("filtreIssue").value.trim().toLowerCase();
+  const avecPbs = DONNEES.etudiants.filter(e => e.username && e.depot_ok && problemes(e).length > 0
+    && (!filtre || e.username.toLowerCase() === filtre));
+  if (avecPbs.length === 0) { alert("Aucun étudiant avec des points bloquants."); return; }
+
+  function corpsIssue(e) {
+    const pbs = problemes(e, DONNEES.tds);
+    // Regrouper par TD
+    const parTd = {};
+    const generaux = [];
+    for (const p of pbs) {
+      const m = p.match(/^(td[0-9]+)[\\s]*:[\\s]*(.+)$/i);
+      if (m) { (parTd[m[1].toLowerCase()] = parTd[m[1].toLowerCase()] || []).push(m[2]); }
+      else { generaux.push(p); }
+    }
+    // Ne garder que les TDs où l'étudiant était présent
+    const tdsPresents = Object.keys(parTd).filter(td => e.tds[td] && e.tds[td].presence);
+    if (tdsPresents.length === 0 && generaux.length === 0) return null;
+    let corps = "Bonjour,\\n\\nVoici les points à corriger pour maximiser votre note en Python & Data Science.\\n\\n";
+    for (const td of tdsPresents) {
+      corps += `**${td.toUpperCase()} :**\\n` + parTd[td].map(x => `- ${x}`).join("\\n") + "\\n\\n";
+    }
+    if (generaux.length) {
+      corps += "**Général :**\\n" + generaux.map(x => `- ${x}`).join("\\n") + "\\n\\n";
+    }
+    corps += "Ces points peuvent être corrigés à tout moment. La note sera recalculée lors de la prochaine vérification.\\n\\n";
+    corps += "_Message envoyé automatiquement depuis le tableau de bord enseignant._";
+    return corps;
+  }
+
+  const issues = avecPbs.flatMap(e => {
+    const corps = corpsIssue(e);
+    if (!corps) return [];
+    return [{ repo: `${e.username}/upjv-python-datascience`, nom: e.nom,
+               titre: "Points à corriger — Python & Data Science", corps }];
+  });
+
+  const issuesJson = JSON.stringify(issues, null, 2);
+  const scriptPy = "# -*- coding: utf-8 -*-\\n"
+    + "# Script genere le " + new Date().toLocaleDateString("fr-FR") + " depuis le tableau de bord.\\n"
+    + "# Cree une issue GitHub pour chaque etudiant ayant des points bloquants.\\n"
+    + "# Prerequis : gh auth login\\n"
+    + "# Usage : python envoyer_issues.py\\n"
+    + "import subprocess, json, sys\\n\\n"
+    + "ISSUES = json.loads(r\\\"\\\"\\\"\\n"
+    + issuesJson + "\\n"
+    + "\\\"\\\"\\\")\\n\\n"
+    + "for iss in ISSUES:\\n"
+    + "    cmd = [\\n"
+    + "        'gh', 'api', 'repos/' + iss['repo'] + '/issues',\\n"
+    + "        '-f', 'title=' + iss['titre'],\\n"
+    + "        '-f', 'body=' + iss['corps'],\\n"
+    + "    ]\\n"
+    + "    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')\\n"
+    + "    if result.returncode == 0:\\n"
+    + "        data = json.loads(result.stdout)\\n"
+    + "        print('  OK: ' + iss['nom'] + ' -> ' + data.get('html_url', '?'))\\n"
+    + "    else:\\n"
+    + "        print('  ERREUR: ' + iss['nom'] + ' (' + iss['repo'] + '): ' + result.stderr.strip())\\n"
+    + "\\nprint('\\\\nFin - ' + str(len(ISSUES)) + ' issue(s) envoyee(s).')\\n";
+
+  const blob = new Blob([scriptPy], {type: "text/x-python"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "envoyer_issues.py";
+  a.click();
+  alert(`Script généré pour ${avecPbs.length} étudiant(s).\\nLancez : python envoyer_issues.py`);
 });
 document.addEventListener("click", (ev) => {
   const th = ev.target.closest("th[data-cle]");
