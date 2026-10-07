@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tableau de bord enseignant — suivi complet de la promo.
 
 Usage :
@@ -91,6 +91,16 @@ GOOGLE_SHEETS = {
         "https://docs.google.com/spreadsheets/d/"
         "1S0Y1RvufZMAemgTmRn5j6EtvCxlro6bFJ5LNYbhWx1o"
         "/export?format=csv&gid=362872238"
+    ),
+    "TD04 - Feuille de Présence (auto).csv": (
+        "https://docs.google.com/spreadsheets/d/"
+        "1Vg3eB8slp5nOH-6EOlcRlwYEqp2XwGUFcqoMH6OVfBU"
+        "/export?format=csv"
+    ),
+    "TD04 - Quiz (auto).csv": (
+        "https://docs.google.com/spreadsheets/d/"
+        "1y7Cp22_ziZ7MyJ3CkP_Vp0NazniyaYxZ_Kn3ZPSqcZA"
+        "/export?format=csv"
     ),
 }
 
@@ -1316,3 +1326,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
