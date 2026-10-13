@@ -290,9 +290,14 @@ def sauver_mapping(annuaire):
             redacteur.writerow(annuaire[email])
 
 
-def construire_annuaire(presences, quiz):
-    """Fusionne le cache, les feuilles de présence et les URL saisies au quiz."""
-    annuaire = charger_mapping()
+def construire_annuaire(presences, quiz, reconstruire=False):
+    """Fusionne les feuilles de présence et les URL saisies au quiz.
+
+    reconstruire=True (--reload complet) : repart d'un annuaire vide —
+    seules les données des exports actuels sont conservées.
+    reconstruire=False : fusionne avec l'existant etudiants.csv.
+    """
+    annuaire = {} if reconstruire else charger_mapping()
 
     for td, chemins in fichiers_exports("presence").items():
         for chemin in chemins:
@@ -647,7 +652,7 @@ def notes_du_td(td, presence, quiz, audit, git, proprete=None):
 def collecter(tds, hors_ligne=False, rafraichir=False):
     presences = charger_presences()
     quiz = charger_quiz()
-    annuaire = construire_annuaire(presences, quiz)
+    annuaire = construire_annuaire(presences, quiz, reconstruire=True)
     gh = GitHub(hors_ligne=hors_ligne, rafraichir=rafraichir)
 
     # Filtre par classe si CLASSE_FILTRE est défini.
